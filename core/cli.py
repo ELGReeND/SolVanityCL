@@ -54,7 +54,7 @@ def cli():
     help="Output directory.",
 )
 @click.option(
-    "--select-device/--no-select-device",
+    "--select-device",
     "select_device",
     type=int,
     default=None,
