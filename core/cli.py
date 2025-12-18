@@ -69,6 +69,13 @@ def cli():
 @click.option(
     "--is-case-sensitive", type=bool, default=True, help="Case sensitive search flag."
 )
+@click.option(
+    "--starts-and-ends-with-file",
+    "starts_ends_file",
+    type=click.Path(exists=True, dir_okay=False, readable=True),
+    default=None,
+    help="Path to a file containing prefix/suffix pairs in the form <PREFIX>:<SUFFIX>, one per line.",
+)
 def search_pubkey(
     starts_with,
     ends_with,
@@ -77,17 +84,46 @@ def search_pubkey(
     select_device,
     iteration_bits,
     is_case_sensitive,
+    starts_ends_file,
 ):
     """Search for Solana vanity pubkeys."""
-    if not starts_with and not ends_with:
-        click.echo("Please provide at least one of --starts-with or --ends-with.")
-        ctx = click.get_current_context()
-        click.echo(ctx.get_help())
+    if starts_ends_file and (starts_with or ends_with):
+        click.echo(
+            "Use either --starts-and-ends-with-file or the --starts-with/--ends-with options, not both."
+        )
         sys.exit(1)
 
-    for prefix in starts_with:
-        check_character("starts_with", prefix)
-    check_character("ends_with", ends_with)
+    patterns: List[Tuple[List[str], str]] = []
+    if starts_ends_file:
+        with open(starts_ends_file, "r", encoding="utf-8") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if ":" not in stripped:
+                    click.echo(
+                        f"Invalid line in {starts_ends_file}: {stripped!r}. Expected format <PREFIX>:<SUFFIX>."
+                    )
+                    sys.exit(1)
+                prefix, suffix = stripped.split(":", 1)
+                check_character("starts_with", prefix)
+                check_character("ends_with", suffix)
+                patterns.append(([prefix], suffix))
+        if not patterns:
+            click.echo(
+                f"No valid prefix/suffix pairs found in {starts_ends_file}. Nothing to search."
+            )
+            sys.exit(1)
+    else:
+        if not starts_with and not ends_with:
+            click.echo("Please provide at least one of --starts-with or --ends-with.")
+            ctx = click.get_current_context()
+            click.echo(ctx.get_help())
+            sys.exit(1)
+        for prefix in starts_with:
+            check_character("starts_with", prefix)
+        check_character("ends_with", ends_with)
+        patterns.append((list(starts_with), ends_with))
 
     chosen_devices: Optional[Tuple[int, List[int]]] = None
     if select_device is not None:
@@ -107,50 +143,61 @@ def search_pubkey(
         gpu_counts = len(get_all_gpu_devices())
 
     logging.info(
-        "Searching Solana pubkey with starts_with=(%s), ends_with=%s, is_case_sensitive=%s",
-        ", ".join(repr(s) for s in starts_with),
-        repr(ends_with),
+        "Using %s OpenCL device(s) with case_sensitive=%s",
+        gpu_counts,
         is_case_sensitive,
     )
-    logging.info(f"Using {gpu_counts} OpenCL device(s)")
 
-    result_count = 0
-    with multiprocessing.Manager() as manager:
-        kernel_source = load_kernel_source(starts_with, ends_with, is_case_sensitive)
-        lock = manager.Lock()
-        pool = Pool(processes=gpu_counts, initializer=_init_worker)
+    def run_search(pattern_starts: List[str], pattern_ends: str) -> None:
+        result_count = 0
+        with multiprocessing.Manager() as manager:
+            kernel_source = load_kernel_source(
+                pattern_starts, pattern_ends, is_case_sensitive
+            )
+            lock = manager.Lock()
+            pool = Pool(processes=gpu_counts, initializer=_init_worker)
 
-        try:
-            while result_count < count:
-                stop_flag = manager.Value("i", 0)
-                async_result = pool.starmap_async(
-                    multi_gpu_init,
-                    [
-                        (
-                            x,
-                            HostSetting(kernel_source, iteration_bits),
-                            gpu_counts,
-                            stop_flag,
-                            lock,
-                            chosen_devices,
-                        )
-                        for x in range(gpu_counts)
-                    ],
-                )
-                while True:
-                    try:
-                        results = async_result.get(timeout=1)
-                        break
-                    except TimeoutError:
-                        continue
-                result_count += save_result(results, output_dir)
-        except KeyboardInterrupt:
-            logging.info("Stopping search after receiving Ctrl+C.")
-            pool.terminate()
-        else:
-            pool.close()
-        finally:
-            pool.join()
+            try:
+                while result_count < count:
+                    stop_flag = manager.Value("i", 0)
+                    async_result = pool.starmap_async(
+                        multi_gpu_init,
+                        [
+                            (
+                                x,
+                                HostSetting(kernel_source, iteration_bits),
+                                gpu_counts,
+                                stop_flag,
+                                lock,
+                                chosen_devices,
+                            )
+                            for x in range(gpu_counts)
+                        ],
+                    )
+                    while True:
+                        try:
+                            results = async_result.get(timeout=1)
+                            break
+                        except TimeoutError:
+                            continue
+                    result_count += save_result(results, output_dir)
+            except KeyboardInterrupt:
+                logging.info("Stopping search after receiving Ctrl+C.")
+                pool.terminate()
+            else:
+                pool.close()
+            finally:
+                pool.join()
+
+    for idx, (pattern_starts, pattern_ends) in enumerate(patterns, start=1):
+        logging.info(
+            "Searching pattern %s/%s with starts_with=%s, ends_with=%s",
+            idx,
+            len(patterns),
+            ", ".join(repr(s) for s in pattern_starts),
+            repr(pattern_ends),
+        )
+        run_search(pattern_starts, pattern_ends)
 
 
 @cli.command(context_settings={"show_default": True})
