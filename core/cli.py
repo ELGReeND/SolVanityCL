@@ -1,5 +1,6 @@
 import logging
 import multiprocessing
+import os
 import signal
 import sys
 from multiprocessing import TimeoutError
@@ -13,6 +14,7 @@ from core.config import DEFAULT_ITERATION_BITS, HostSetting
 from core.opencl.manager import (
     get_all_gpu_devices,
     get_chosen_devices,
+    get_device_by_index,
 )
 from core.searcher import multi_gpu_init, save_result
 from core.utils.helpers import check_character, load_kernel_source
@@ -53,8 +55,10 @@ def cli():
 )
 @click.option(
     "--select-device/--no-select-device",
-    default=False,
-    help="Select OpenCL device manually",
+    "select_device",
+    type=int,
+    default=None,
+    help="Select a single OpenCL GPU device by its global index (0-based). Use `show_device` to see indices.",
 )
 @click.option(
     "--iteration-bits",
@@ -86,7 +90,17 @@ def search_pubkey(
     check_character("ends_with", ends_with)
 
     chosen_devices: Optional[Tuple[int, List[int]]] = None
-    if select_device:
+    if select_device is not None:
+        platform_id, device_id = get_device_by_index(select_device)
+        chosen_devices = (platform_id, [device_id])
+        gpu_counts = len(chosen_devices[1])
+        logging.info(
+            "Using selected GPU device %s (platform %s, device %s)",
+            select_device,
+            platform_id,
+            device_id,
+        )
+    elif os.environ.get("CHOSEN_OPENCL_DEVICES"):
         chosen_devices = get_chosen_devices()
         gpu_counts = len(chosen_devices[1])
     else:
@@ -143,11 +157,15 @@ def search_pubkey(
 def show_device():
     """Show available OpenCL devices."""
     platforms = cl.get_platforms()
+    global_index = 0
     for p_index, platform in enumerate(platforms):
         click.echo(f"Platform {p_index}: {platform.name}")
         devices = platform.get_devices(device_type=cl.device_type.GPU)
         for d_index, device in enumerate(devices):
-            click.echo(f"  - Device {d_index}: {device.name}")
+            click.echo(
+                f"  - Device {d_index}: {device.name} (global index {global_index})"
+            )
+            global_index += 1
 
 
 if __name__ == "__main__":
