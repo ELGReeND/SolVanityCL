@@ -11,6 +11,8 @@ from core.opencl.manager import (
     get_selected_gpu_devices,
 )
 
+_SEARCHER_CACHE = {}
+
 
 class Searcher:
     def __init__(
@@ -97,12 +99,26 @@ def multi_gpu_init(
     chosen_devices: Optional[Tuple[int, List[int]]] = None,
 ) -> List:
     try:
-        searcher = Searcher(
-            kernel_source=setting.kernel_source,
-            index=index,
-            setting=setting,
-            chosen_devices=chosen_devices,
+        device_key: Optional[Tuple[int, Tuple[int, ...]]] = None
+        if chosen_devices is not None:
+            device_key = (chosen_devices[0], tuple(chosen_devices[1]))
+        cache_key = (
+            index,
+            hash(setting.kernel_source),
+            setting.iteration_bits,
+            device_key,
         )
+        searcher = _SEARCHER_CACHE.get(cache_key)
+        if searcher is None:
+            searcher = Searcher(
+                kernel_source=setting.kernel_source,
+                index=index,
+                setting=setting,
+                chosen_devices=chosen_devices,
+            )
+            _SEARCHER_CACHE[cache_key] = searcher
+        else:
+            searcher.setting = setting
         i = 0
         st = time.time()
         while True:
