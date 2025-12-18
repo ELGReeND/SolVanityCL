@@ -7,6 +7,9 @@ import pyopencl as cl
 from base58 import b58decode
 
 
+BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+BASE58_INDEX = {c: i for i, c in enumerate(BASE58_ALPHABET)}
+
 def check_character(name: str, character: str) -> None:
     try:
         b58decode(character)
@@ -28,14 +31,16 @@ def load_kernel_source(
     for starts_with_list, ends_with in patterns:
         if starts_with_list:
             for prefix in starts_with_list:
-                prefix_entries.append(list(prefix.encode()))
-                suffix_entries.append(list(ends_with.encode()))
+                prefix_entries.append([BASE58_INDEX[c] for c in prefix])
+                suffix_entries.append([BASE58_INDEX[c] for c in ends_with])
         else:
             prefix_entries.append([])
-            suffix_entries.append(list(ends_with.encode()))
+            suffix_entries.append([BASE58_INDEX[c] for c in ends_with])
 
     max_prefix_len = max((len(p) for p in prefix_entries), default=0)
     max_suffix_len = max((len(s) for s in suffix_entries), default=0)
+    prefix_lengths_list = [len(p) for p in prefix_entries]
+    suffix_lengths_list = [len(s) for s in suffix_entries]
     suffix_max_dim = max(max_suffix_len, 1)
 
     for p in prefix_entries:
@@ -58,31 +63,38 @@ def load_kernel_source(
         elif line.startswith("#define SUFFIX_MAX "):
             source_lines[i] = f"#define SUFFIX_MAX {suffix_max_dim}\n"
         elif line.startswith("constant uchar PREFIXES"):
-            prefixes_str = "{"
-            for prefix in prefix_entries:
-                prefixes_str += "{" + ", ".join(map(str, prefix)) + "}, "
-            prefixes_str = prefixes_str.rstrip(", ") + "}"
+            prefixes_str = "{" + ", ".join("{" + ", ".join(map(str, prefix)) + "}" for prefix in prefix_entries) + "}"
             source_lines[i] = f"constant uchar PREFIXES[N][L] = {prefixes_str};\n"
         elif line.startswith("constant uchar PREFIX_LENGTHS"):
             prefix_lengths = (
-                "{" + ", ".join(str(len(p)) for p in prefix_entries) + "}"
+                "{" + ", ".join(str(l) for l in prefix_lengths_list) + "}"
             )
             source_lines[i] = (
                 f"constant uchar PREFIX_LENGTHS[N] = {prefix_lengths};\n"
             )
         elif line.startswith("constant uchar SUFFIXES"):
-            suffixes_str = "{"
-            for suffix in suffix_entries:
-                suffixes_str += "{" + ", ".join(map(str, suffix)) + "}, "
-            suffixes_str = suffixes_str.rstrip(", ") + "}"
+            suffixes_str = "{" + ", ".join("{" + ", ".join(map(str, suffix)) + "}" for suffix in suffix_entries) + "}"
             source_lines[i] = (
                 f"constant uchar SUFFIXES[N][SUFFIX_MAX] = {suffixes_str};\n"
             )
         elif line.startswith("constant uchar SUFFIX_LENGTHS"):
-            suffix_lengths = "{" + ", ".join(str(len(s)) for s in suffix_entries) + "}"
+            suffix_lengths = "{" + ", ".join(str(l) for l in suffix_lengths_list) + "}"
             source_lines[i] = (
                 f"constant uchar SUFFIX_LENGTHS[N] = {suffix_lengths};\n"
             )
+        elif line.startswith("constant uchar PREFIX_FIRST"):
+            prefix_first = "{" + ", ".join(
+                str(p[0] if l > 0 else 255)
+                for p, l in zip(prefix_entries, prefix_lengths_list)
+            ) + "}"
+            source_lines[i] = f"constant uchar PREFIX_FIRST[N] = {prefix_first};\n"
+        elif line.startswith("constant uchar SUFFIX_LAST"):
+            suffix_last = "{" + ", ".join(
+                str(s[l - 1] if l > 0 else 255)
+                for s, l in zip(suffix_entries, suffix_lengths_list)
+            ) + "}"
+            source_lines[i] = f"constant uchar SUFFIX_LAST[N] = {suffix_last};\n"
+
         elif line.startswith("constant bool CASE_SENSITIVE"):
             source_lines[i] = (
                 f"constant bool CASE_SENSITIVE = {str(is_case_sensitive).lower()};\n"
