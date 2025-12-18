@@ -11,6 +11,8 @@ from core.opencl.manager import (
     get_selected_gpu_devices,
 )
 
+_SEARCHER_CACHE = {}
+
 
 class Searcher:
     def __init__(
@@ -45,7 +47,7 @@ class Searcher:
             hostbuf=self.setting.key32,
         )
         self.memobj_output = cl.Buffer(
-            self.context, cl.mem_flags.READ_WRITE, 33 * np.ubyte().itemsize
+            self.context, cl.mem_flags.READ_WRITE, 34 * np.ubyte().itemsize
         )
         self.memobj_occupied_bytes = cl.Buffer(
             self.context,
@@ -57,7 +59,7 @@ class Searcher:
             cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
             hostbuf=np.array([self.index]),
         )
-        self.output = np.zeros(33, dtype=np.ubyte)
+        self.output = np.zeros(34, dtype=np.ubyte)
         self.kernel.set_arg(0, self.memobj_key32)
         self.kernel.set_arg(1, self.memobj_output)
         self.kernel.set_arg(2, self.memobj_occupied_bytes)
@@ -92,34 +94,33 @@ def multi_gpu_init(
     index: int,
     setting: HostSetting,
     gpu_counts: int,
-    stop_flag,
-    lock,
     chosen_devices: Optional[Tuple[int, List[int]]] = None,
 ) -> List:
     try:
-        searcher = Searcher(
-            kernel_source=setting.kernel_source,
-            index=index,
-            setting=setting,
-            chosen_devices=chosen_devices,
+        device_key: Optional[Tuple[int, Tuple[int, ...]]] = None
+        if chosen_devices is not None:
+            device_key = (chosen_devices[0], tuple(chosen_devices[1]))
+        cache_key = (
+            index,
+            hash(setting.kernel_source),
+            setting.iteration_bits,
+            device_key,
         )
+        searcher = _SEARCHER_CACHE.get(cache_key)
+        if searcher is None:
+            searcher = Searcher(
+                kernel_source=setting.kernel_source,
+                index=index,
+                setting=setting,
+                chosen_devices=chosen_devices,
+            )
+            _SEARCHER_CACHE[cache_key] = searcher
         i = 0
-        st = time.time()
         while True:
             result = searcher.find(i == 0)
             if result[0]:
-                with lock:
-                    if not stop_flag.value:
-                        stop_flag.value = 1
                 return result.tolist()
-            if time.time() - st > max(gpu_counts, 1):
-                i = 0
-                st = time.time()
-                with lock:
-                    if stop_flag.value:
-                        return result.tolist()
-            else:
-                i += 1
+            i += 1
     except Exception as e:
         logging.exception(e)
     return [0]
@@ -133,6 +134,9 @@ def save_result(outputs: List, output_dir: str) -> int:
         if not output[0]:
             continue
         result_count += 1
-        pv_bytes = bytes(output[1:])
+        if len(output) >= 34:
+            pv_bytes = bytes(output[2:34])
+        else:
+            pv_bytes = bytes(output[1:])
         save_keypair(pv_bytes, output_dir)
     return result_count
