@@ -60,10 +60,10 @@ def get_result(outputs: List):
     private_key, pub_key = "", ""
     result_count = 0
     for output in outputs:
-        if not output[0]:
+        if int.from_bytes(bytes(output[0:4]), 'little') == 0:
             continue
         result_count += 1
-        pv_bytes = bytes(output[2:34]) if len(output) >= 34 else bytes(output[1:])
+        pv_bytes = bytes(output[8:40]) if len(output) >= 34 else bytes(output[1:])
         pv = SigningKey(pv_bytes)
         pb_bytes = bytes(pv.verify_key)
         pub_key = b58encode(pb_bytes).decode()
@@ -129,9 +129,9 @@ def generate_address(prefix, suffix, jobId, is_case_sensitive):
                     if isinstance(partial_result, dict) and 'error' in partial_result:
                         logging.error(f"Error in worker process: {partial_result['error']}")
                         continue 
-                    if isinstance(partial_result, np.ndarray) and partial_result.size > 0 and partial_result[0]:
+                    if isinstance(partial_result, np.ndarray) and partial_result.size > 0 and int.from_bytes(bytes(partial_result[0:4]), 'little'):
                         results.append(partial_result)
-                    elif isinstance(partial_result, list) and len(partial_result) > 0 and partial_result[0]:
+                    elif isinstance(partial_result, list) and len(partial_result) > 0 and int.from_bytes(bytes(partial_result[0:4]), 'little'):
                         results.append(partial_result)
 
 
