@@ -45,7 +45,7 @@ class Searcher:
             hostbuf=self.setting.key32,
         )
         self.memobj_output = cl.Buffer(
-            self.context, cl.mem_flags.READ_WRITE, 33 * np.ubyte().itemsize
+            self.context, cl.mem_flags.READ_WRITE, 34 * np.ubyte().itemsize
         )
         self.memobj_occupied_bytes = cl.Buffer(
             self.context,
@@ -57,7 +57,7 @@ class Searcher:
             cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
             hostbuf=np.array([self.index]),
         )
-        self.output = np.zeros(33, dtype=np.ubyte)
+        self.output = np.zeros(34, dtype=np.ubyte)
         self.kernel.set_arg(0, self.memobj_key32)
         self.kernel.set_arg(1, self.memobj_output)
         self.kernel.set_arg(2, self.memobj_occupied_bytes)
@@ -133,6 +133,9 @@ def save_result(outputs: List, output_dir: str) -> int:
         if not output[0]:
             continue
         result_count += 1
-        pv_bytes = bytes(output[1:])
+        if len(output) >= 34:
+            pv_bytes = bytes(output[2:34])
+        else:
+            pv_bytes = bytes(output[1:])
         save_keypair(pv_bytes, output_dir)
     return result_count
