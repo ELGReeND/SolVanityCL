@@ -1,6 +1,8 @@
 import logging
 import multiprocessing
+import signal
 import sys
+from multiprocessing import TimeoutError
 from multiprocessing.pool import Pool
 from typing import List, Optional, Tuple
 
@@ -16,6 +18,11 @@ from core.searcher import multi_gpu_init, save_result
 from core.utils.helpers import check_character, load_kernel_source
 
 logging.basicConfig(level="INFO", format="[%(levelname)s %(asctime)s] %(message)s")
+
+
+def _init_worker() -> None:
+    """Ignore SIGINT in workers so the main process can handle Ctrl+C cleanly."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 @click.group()
@@ -95,14 +102,14 @@ def search_pubkey(
 
     result_count = 0
     with multiprocessing.Manager() as manager:
-        with Pool(processes=gpu_counts) as pool:
-            kernel_source = load_kernel_source(
-                starts_with, ends_with, is_case_sensitive
-            )
-            lock = manager.Lock()
+        kernel_source = load_kernel_source(starts_with, ends_with, is_case_sensitive)
+        lock = manager.Lock()
+        pool = Pool(processes=gpu_counts, initializer=_init_worker)
+
+        try:
             while result_count < count:
                 stop_flag = manager.Value("i", 0)
-                results = pool.starmap(
+                async_result = pool.starmap_async(
                     multi_gpu_init,
                     [
                         (
@@ -116,7 +123,20 @@ def search_pubkey(
                         for x in range(gpu_counts)
                     ],
                 )
+                while True:
+                    try:
+                        results = async_result.get(timeout=1)
+                        break
+                    except TimeoutError:
+                        continue
                 result_count += save_result(results, output_dir)
+        except KeyboardInterrupt:
+            logging.info("Stopping search after receiving Ctrl+C.")
+            pool.terminate()
+        else:
+            pool.close()
+        finally:
+            pool.join()
 
 
 @cli.command(context_settings={"show_default": True})
