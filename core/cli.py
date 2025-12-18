@@ -16,7 +16,8 @@ from core.opencl.manager import (
     get_chosen_devices,
     get_device_by_index,
 )
-from core.searcher import multi_gpu_init, save_result
+from core.utils.crypto import save_keypair
+from core.searcher import multi_gpu_init
 from core.utils.helpers import check_character, load_kernel_source
 
 logging.basicConfig(level="INFO", format="[%(levelname)s %(asctime)s] %(message)s")
@@ -123,7 +124,11 @@ def search_pubkey(
         for prefix in starts_with:
             check_character("starts_with", prefix)
         check_character("ends_with", ends_with)
-        patterns.append((list(starts_with), ends_with))
+        if starts_with:
+            for prefix in starts_with:
+                patterns.append(([prefix], ends_with))
+        else:
+            patterns.append(([], ends_with))
 
     chosen_devices: Optional[Tuple[int, List[int]]] = None
     if select_device is not None:
@@ -148,56 +153,57 @@ def search_pubkey(
         is_case_sensitive,
     )
 
-    def run_search(pattern_starts: List[str], pattern_ends: str) -> None:
-        result_count = 0
-        with multiprocessing.Manager() as manager:
-            kernel_source = load_kernel_source(
-                pattern_starts, pattern_ends, is_case_sensitive
-            )
-            lock = manager.Lock()
-            pool = Pool(processes=gpu_counts, initializer=_init_worker)
+    remaining_per_pattern = [count for _ in patterns]
+    total_remaining = sum(remaining_per_pattern)
 
-            try:
-                while result_count < count:
-                    stop_flag = manager.Value("i", 0)
-                    async_result = pool.starmap_async(
-                        multi_gpu_init,
-                        [
-                            (
-                                x,
-                                HostSetting(kernel_source, iteration_bits),
-                                gpu_counts,
-                                stop_flag,
-                                lock,
-                                chosen_devices,
-                            )
-                            for x in range(gpu_counts)
-                        ],
-                    )
-                    while True:
-                        try:
-                            results = async_result.get(timeout=1)
-                            break
-                        except TimeoutError:
-                            continue
-                    result_count += save_result(results, output_dir)
-            except KeyboardInterrupt:
-                logging.info("Stopping search after receiving Ctrl+C.")
-                pool.terminate()
-            else:
-                pool.close()
-            finally:
-                pool.join()
+    with multiprocessing.Manager() as manager:
+        kernel_source = load_kernel_source(patterns, is_case_sensitive)
+        lock = manager.Lock()
+        pool = Pool(processes=gpu_counts, initializer=_init_worker)
 
-    for idx, (pattern_starts, pattern_ends) in enumerate(patterns, start=1):
-        logging.info(
-            "Searching pattern %s/%s with starts_with=%s, ends_with=%s",
-            idx,
-            len(patterns),
-            ", ".join(repr(s) for s in pattern_starts),
-            repr(pattern_ends),
-        )
-        run_search(pattern_starts, pattern_ends)
+        try:
+            while total_remaining > 0:
+                stop_flag = manager.Value("i", 0)
+                async_result = pool.starmap_async(
+                    multi_gpu_init,
+                    [
+                        (
+                            x,
+                            HostSetting(kernel_source, iteration_bits),
+                            gpu_counts,
+                            stop_flag,
+                            lock,
+                            chosen_devices,
+                        )
+                        for x in range(gpu_counts)
+                    ],
+                )
+                while True:
+                    try:
+                        results = async_result.get(timeout=1)
+                        break
+                    except TimeoutError:
+                        continue
+
+                for output in results:
+                    if not output or not output[0]:
+                        continue
+                    pattern_idx = int(output[0]) - 1
+                    if pattern_idx < 0 or pattern_idx >= len(remaining_per_pattern):
+                        continue
+                    if remaining_per_pattern[pattern_idx] <= 0:
+                        continue
+                    remaining_per_pattern[pattern_idx] -= 1
+                    total_remaining -= 1
+                    pv_bytes = bytes(output[2:34])
+                    save_keypair(pv_bytes, output_dir)
+        except KeyboardInterrupt:
+            logging.info("Stopping search after receiving Ctrl+C.")
+            pool.terminate()
+        else:
+            pool.close()
+        finally:
+            pool.join()
 
 
 @cli.command(context_settings={"show_default": True})

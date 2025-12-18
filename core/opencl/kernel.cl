@@ -8,11 +8,14 @@ typedef unsigned long uint64_t;
 typedef long int64_t;
 typedef int32_t fe[10];
 
-// DO NOT EDIT BELOW 5 LINES BY HAND -- CHANGES WILL BE OVERWRITTEN
+// DO NOT EDIT BELOW 8 LINES BY HAND -- CHANGES WILL BE OVERWRITTEN
 #define N 1
 #define L 3
+#define S 0
 constant uchar PREFIXES[N][L] = {{83, 111, 76}};
-constant uchar SUFFIX[] = {};
+constant uchar PREFIX_LENGTHS[N] = {3};
+constant uchar SUFFIXES[N][S] = {};
+constant uchar SUFFIX_LENGTHS[N] = {0};
 constant bool CASE_SENSITIVE = true;
 // DO NOT EDIT ABOVE THIS LINE -- END OF AUTO-GENERATED CODE
 
@@ -3756,41 +3759,41 @@ __kernel void generate_pubkey(constant uchar *seed, global uchar *out,
   uchar addr_buffer[45] __attribute__((aligned(4)));
   uchar *addr_raw = base58_encode(public_key, &length, addr_buffer);
 
-  unsigned int any_mismatch = 1;
+  uchar matched_pattern = 0;
 
-  // prefix matching
   #pragma unroll
   for (size_t p = 0; p < N; p++) {
     unsigned int prefix_mismatch = 0;
-    for (size_t i = 0; i < L && PREFIXES[p][i] != 0; i++) {
+    for (size_t i = 0; i < PREFIX_LENGTHS[p]; i++) {
       prefix_mismatch |= ADJUST_INPUT_CASE(addr_raw[i]) ^ ADJUST_INPUT_CASE(alphabet_indices[PREFIXES[p][i]]);
     }
 
-    if (!prefix_mismatch) {
-      any_mismatch = 0;
+    unsigned int suffix_mismatch = 0;
+    for (size_t i = 0; i < SUFFIX_LENGTHS[p]; i++) {
+      suffix_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - SUFFIX_LENGTHS[p] + i]) ^ ADJUST_INPUT_CASE(alphabet_indices[SUFFIXES[p][i]]);
+    }
+
+    if (!prefix_mismatch && !suffix_mismatch) {
+      matched_pattern = (uchar)(p + 1);
       break;
     }
-}
-
-  // suffix matching
-  #pragma unroll
-  for (size_t i = 0; i < sizeof(SUFFIX); i++) {
-    any_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - sizeof(SUFFIX) + i]) ^ ADJUST_INPUT_CASE(alphabet_indices[SUFFIX[i]]);
   }
 
 
-  if (!any_mismatch) {
+  if (matched_pattern) {
     // assign to out
     if (out[0] == 0) {
-      out[0] = length;
+      out[0] = matched_pattern;
+      out[1] = (uchar)length;
       for (size_t j = 0; j < 32; j++) {
-        out[j + 1] = key_base[j];
+        out[j + 2] = key_base[j];
       }
     }
-    if (length < out[0]) {
-      out[0] = length;
+    if (out[0] && length < out[1]) {
+      out[0] = matched_pattern;
+      out[1] = (uchar)length;
       for (size_t j = 0; j < 32; j++) {
-        out[j + 1] = key_base[j];
+        out[j + 2] = key_base[j];
       }
     }
   }
