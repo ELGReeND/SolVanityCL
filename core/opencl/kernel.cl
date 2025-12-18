@@ -11,10 +11,10 @@ typedef int32_t fe[10];
 // DO NOT EDIT BELOW 8 LINES BY HAND -- CHANGES WILL BE OVERWRITTEN
 #define N 1
 #define L 3
-#define S 0
+#define SUFFIX_MAX 1
 constant uchar PREFIXES[N][L] = {{83, 111, 76}};
 constant uchar PREFIX_LENGTHS[N] = {3};
-constant uchar SUFFIXES[N][S] = {};
+constant uchar SUFFIXES[N][SUFFIX_MAX] = {{0}};
 constant uchar SUFFIX_LENGTHS[N] = {0};
 constant bool CASE_SENSITIVE = true;
 // DO NOT EDIT ABOVE THIS LINE -- END OF AUTO-GENERATED CODE

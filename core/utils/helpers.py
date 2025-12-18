@@ -36,12 +36,13 @@ def load_kernel_source(
 
     max_prefix_len = max((len(p) for p in prefix_entries), default=0)
     max_suffix_len = max((len(s) for s in suffix_entries), default=0)
+    suffix_max_dim = max(max_suffix_len, 1)
 
     for p in prefix_entries:
         p.extend([0] * (max_prefix_len - len(p)))
 
     for s in suffix_entries:
-        s.extend([0] * (max_suffix_len - len(s)))
+        s.extend([0] * (suffix_max_dim - len(s)))
 
     kernel_path = Path(__file__).parent.parent / "opencl" / "kernel.cl"
     if not kernel_path.exists():
@@ -54,8 +55,8 @@ def load_kernel_source(
             source_lines[i] = f"#define N {len(prefix_entries)}\n"
         elif line.startswith("#define L "):
             source_lines[i] = f"#define L {max_prefix_len}\n"
-        elif line.startswith("#define S "):
-            source_lines[i] = f"#define S {max_suffix_len}\n"
+        elif line.startswith("#define SUFFIX_MAX "):
+            source_lines[i] = f"#define SUFFIX_MAX {suffix_max_dim}\n"
         elif line.startswith("constant uchar PREFIXES"):
             prefixes_str = "{"
             for prefix in prefix_entries:
@@ -74,7 +75,9 @@ def load_kernel_source(
             for suffix in suffix_entries:
                 suffixes_str += "{" + ", ".join(map(str, suffix)) + "}, "
             suffixes_str = suffixes_str.rstrip(", ") + "}"
-            source_lines[i] = f"constant uchar SUFFIXES[N][S] = {suffixes_str};\n"
+            source_lines[i] = (
+                f"constant uchar SUFFIXES[N][SUFFIX_MAX] = {suffixes_str};\n"
+            )
         elif line.startswith("constant uchar SUFFIX_LENGTHS"):
             suffix_lengths = "{" + ", ".join(str(len(s)) for s in suffix_entries) + "}"
             source_lines[i] = (
