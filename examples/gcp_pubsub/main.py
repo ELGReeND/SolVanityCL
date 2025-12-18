@@ -63,7 +63,7 @@ def get_result(outputs: List):
         if not output[0]:
             continue
         result_count += 1
-        pv_bytes = bytes(output[1:])
+        pv_bytes = bytes(output[2:34]) if len(output) >= 34 else bytes(output[1:])
         pv = SigningKey(pv_bytes)
         pb_bytes = bytes(pv.verify_key)
         pub_key = b58encode(pb_bytes).decode()
@@ -105,7 +105,7 @@ def generate_address(prefix, suffix, jobId, is_case_sensitive):
     with multiprocessing.Manager() as manager:
         with Pool(processes=gpu_counts) as pool:
             kernel_source = load_kernel_source(
-                starts_with, ends_with, is_case_sensitive
+                [(starts_with, ends_with)], is_case_sensitive
             )
             lock = manager.Lock()
             while result_count < count:
