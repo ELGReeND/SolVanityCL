@@ -186,16 +186,19 @@ def search_pubkey(
                         continue
 
                 for output in results:
-                    if not output or not output[0]:
+                    if not output or int.from_bytes(bytes(output[0:4]), byteorder='little', signed=False) == 0:
                         continue
-                    pattern_idx = int(output[0]) - 1
+                    pattern_plus = int.from_bytes(bytes(output[0:4]), byteorder='little', signed=False)
+                    if not pattern_plus:
+                        continue
+                    pattern_idx = pattern_plus - 1
                     if pattern_idx < 0 or pattern_idx >= len(remaining_per_pattern):
                         continue
                     if remaining_per_pattern[pattern_idx] <= 0:
                         continue
                     remaining_per_pattern[pattern_idx] -= 1
                     total_remaining -= 1
-                    pv_bytes = bytes(output[2:34])
+                    pv_bytes = bytes(output[8:40])
                     save_keypair(pv_bytes, output_dir)
         except KeyboardInterrupt:
             logging.info("Stopping search after receiving Ctrl+C.")

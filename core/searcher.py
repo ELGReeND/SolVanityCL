@@ -45,7 +45,7 @@ class Searcher:
             hostbuf=self.setting.key32,
         )
         self.memobj_output = cl.Buffer(
-            self.context, cl.mem_flags.READ_WRITE, 34 * np.ubyte().itemsize
+            self.context, cl.mem_flags.READ_WRITE, 40 * np.ubyte().itemsize
         )
         self.memobj_occupied_bytes = cl.Buffer(
             self.context,
@@ -57,7 +57,7 @@ class Searcher:
             cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
             hostbuf=np.array([self.index]),
         )
-        self.output = np.zeros(34, dtype=np.ubyte)
+        self.output = np.zeros(40, dtype=np.ubyte)
         self.kernel.set_arg(0, self.memobj_key32)
         self.kernel.set_arg(1, self.memobj_output)
         self.kernel.set_arg(2, self.memobj_occupied_bytes)
@@ -77,8 +77,6 @@ class Searcher:
         )
         self.command_queue.flush()
         self.setting.increase_key32()
-        if self.prev_time is not None and self.is_nvidia:
-            time.sleep(self.prev_time * 0.98)
         cl.enqueue_copy(self.command_queue, self.output, self.memobj_output).wait()
         self.prev_time = time.time() - start_time
         if log_stats:
@@ -107,7 +105,7 @@ def multi_gpu_init(
         st = time.time()
         while True:
             result = searcher.find(i == 0)
-            if result[0]:
+            if int.from_bytes(bytes(result[0:4]), byteorder='little', signed=False):
                 with lock:
                     if not stop_flag.value:
                         stop_flag.value = 1
@@ -130,12 +128,18 @@ def save_result(outputs: List, output_dir: str) -> int:
 
     result_count = 0
     for output in outputs:
-        if not output[0]:
+        if output is None:
             continue
+        b = bytes(output)
+        if len(b) < 40:
+            continue
+
+        pattern_plus = int.from_bytes(b[0:4], byteorder="little", signed=False)
+        if not pattern_plus:
+            continue
+
         result_count += 1
-        if len(output) >= 34:
-            pv_bytes = bytes(output[2:34])
-        else:
-            pv_bytes = bytes(output[1:])
+        pv_bytes = b[8:40]
         save_keypair(pv_bytes, output_dir)
+
     return result_count
