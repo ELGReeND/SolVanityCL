@@ -94,6 +94,8 @@ def multi_gpu_init(
     index: int,
     setting: HostSetting,
     gpu_counts: int,
+    stop_flag,
+    lock,
     chosen_devices: Optional[Tuple[int, List[int]]] = None,
 ) -> List:
     try:
@@ -116,11 +118,22 @@ def multi_gpu_init(
             )
             _SEARCHER_CACHE[cache_key] = searcher
         i = 0
+        st = time.time()
         while True:
             result = searcher.find(i == 0)
             if result[0]:
+                with lock:
+                    if not stop_flag.value:
+                        stop_flag.value = 1
                 return result.tolist()
-            i += 1
+            if time.time() - st > max(gpu_counts, 1):
+                i = 0
+                st = time.time()
+                with lock:
+                    if stop_flag.value:
+                        return result.tolist()
+            else:
+                i += 1
     except Exception as e:
         logging.exception(e)
     return [0]
