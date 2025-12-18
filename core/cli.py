@@ -156,49 +156,54 @@ def search_pubkey(
     remaining_per_pattern = [count for _ in patterns]
     total_remaining = sum(remaining_per_pattern)
 
-    kernel_source = load_kernel_source(patterns, is_case_sensitive)
-    pool = Pool(processes=gpu_counts, initializer=_init_worker)
+    with multiprocessing.Manager() as manager:
+        kernel_source = load_kernel_source(patterns, is_case_sensitive)
+        lock = manager.Lock()
+        pool = Pool(processes=gpu_counts, initializer=_init_worker)
 
-    try:
-        while total_remaining > 0:
-            async_result = pool.starmap_async(
-                multi_gpu_init,
-                [
-                    (
-                        x,
-                        HostSetting(kernel_source, iteration_bits),
-                        gpu_counts,
-                        chosen_devices,
-                    )
-                    for x in range(gpu_counts)
-                ],
-            )
-            while True:
-                try:
-                    results = async_result.get(timeout=1)
-                    break
-                except TimeoutError:
-                    continue
+        try:
+            while total_remaining > 0:
+                stop_flag = manager.Value("i", 0)
+                async_result = pool.starmap_async(
+                    multi_gpu_init,
+                    [
+                        (
+                            x,
+                            HostSetting(kernel_source, iteration_bits),
+                            gpu_counts,
+                            stop_flag,
+                            lock,
+                            chosen_devices,
+                        )
+                        for x in range(gpu_counts)
+                    ],
+                )
+                while True:
+                    try:
+                        results = async_result.get(timeout=1)
+                        break
+                    except TimeoutError:
+                        continue
 
-            for output in results:
-                if not output or not output[0]:
-                    continue
-                pattern_idx = int(output[0]) - 1
-                if pattern_idx < 0 or pattern_idx >= len(remaining_per_pattern):
-                    continue
-                if remaining_per_pattern[pattern_idx] <= 0:
-                    continue
-                remaining_per_pattern[pattern_idx] -= 1
-                total_remaining -= 1
-                pv_bytes = bytes(output[2:34])
-                save_keypair(pv_bytes, output_dir)
-    except KeyboardInterrupt:
-        logging.info("Stopping search after receiving Ctrl+C.")
-        pool.terminate()
-    else:
-        pool.close()
-    finally:
-        pool.join()
+                for output in results:
+                    if not output or not output[0]:
+                        continue
+                    pattern_idx = int(output[0]) - 1
+                    if pattern_idx < 0 or pattern_idx >= len(remaining_per_pattern):
+                        continue
+                    if remaining_per_pattern[pattern_idx] <= 0:
+                        continue
+                    remaining_per_pattern[pattern_idx] -= 1
+                    total_remaining -= 1
+                    pv_bytes = bytes(output[2:34])
+                    save_keypair(pv_bytes, output_dir)
+        except KeyboardInterrupt:
+            logging.info("Stopping search after receiving Ctrl+C.")
+            pool.terminate()
+        else:
+            pool.close()
+        finally:
+            pool.join()
 
 
 @cli.command(context_settings={"show_default": True})
