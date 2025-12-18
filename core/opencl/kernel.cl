@@ -14,8 +14,10 @@ typedef int32_t fe[10];
 #define SUFFIX_MAX 1
 constant uchar PREFIXES[N][L] = {{83, 111, 76}};
 constant uchar PREFIX_LENGTHS[N] = {3};
+constant uchar PREFIX_FIRST[N] = {255};
 constant uchar SUFFIXES[N][SUFFIX_MAX] = {{0}};
 constant uchar SUFFIX_LENGTHS[N] = {0};
+constant uchar SUFFIX_LAST[N] = {255};
 constant bool CASE_SENSITIVE = true;
 // DO NOT EDIT ABOVE THIS LINE -- END OF AUTO-GENERATED CODE
 
@@ -3759,42 +3761,53 @@ __kernel void generate_pubkey(constant uchar *seed, global uchar *out,
   uchar addr_buffer[45] __attribute__((aligned(4)));
   uchar *addr_raw = base58_encode(public_key, &length, addr_buffer);
 
-  uchar matched_pattern = 0;
+  uint matched_pattern = 0;
+uchar addr_first = addr_raw[0];
+uchar addr_last = addr_raw[length - 1];
 
-  #pragma unroll
-  for (size_t p = 0; p < N; p++) {
-    unsigned int prefix_mismatch = 0;
-    for (size_t i = 0; i < PREFIX_LENGTHS[p]; i++) {
-      prefix_mismatch |= ADJUST_INPUT_CASE(addr_raw[i]) ^ ADJUST_INPUT_CASE(alphabet_indices[PREFIXES[p][i]]);
-    }
+#pragma unroll
+for (size_t p = 0; p < N; p++) {
+  // Fast prefilter on first/last digit (only if pattern has length > 0)
+  if (PREFIX_LENGTHS[p] && (ADJUST_INPUT_CASE(addr_first) ^ ADJUST_INPUT_CASE(PREFIX_FIRST[p]))) continue;
+  if (SUFFIX_LENGTHS[p] && (ADJUST_INPUT_CASE(addr_last) ^ ADJUST_INPUT_CASE(SUFFIX_LAST[p]))) continue;
 
-    unsigned int suffix_mismatch = 0;
-    for (size_t i = 0; i < SUFFIX_LENGTHS[p]; i++) {
-      suffix_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - SUFFIX_LENGTHS[p] + i]) ^ ADJUST_INPUT_CASE(alphabet_indices[SUFFIXES[p][i]]);
-    }
-
-    if (!prefix_mismatch && !suffix_mismatch) {
-      matched_pattern = (uchar)(p + 1);
-      break;
-    }
+  unsigned int prefix_mismatch = 0;
+  for (size_t i = 1; i < PREFIX_LENGTHS[p]; i++) {
+    prefix_mismatch |= ADJUST_INPUT_CASE(addr_raw[i]) ^ ADJUST_INPUT_CASE(PREFIXES[p][i]);
   }
+
+  unsigned int suffix_mismatch = 0;
+  for (size_t i = 0; i + 1 < SUFFIX_LENGTHS[p]; i++) {
+    suffix_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - SUFFIX_LENGTHS[p] + i]) ^ ADJUST_INPUT_CASE(SUFFIXES[p][i]);
+  }
+
+  if (!prefix_mismatch && !suffix_mismatch) {
+    matched_pattern = (uint)(p + 1);
+    break;
+  }
+}
+
 
 
   if (matched_pattern) {
-    // assign to out
-    if (out[0] == 0) {
-      out[0] = matched_pattern;
-      out[1] = (uchar)length;
-      for (size_t j = 0; j < 32; j++) {
-        out[j + 2] = key_base[j];
-      }
-    }
-    if (out[0] && length < out[1]) {
-      out[0] = matched_pattern;
-      out[1] = (uchar)length;
-      for (size_t j = 0; j < 32; j++) {
-        out[j + 2] = key_base[j];
-      }
+  global uint *out_u32 = (global uint *)out;
+  uint len_u = (uint)length;
+
+  // assign to out
+  if (out_u32[0] == 0) {
+    out_u32[0] = matched_pattern;
+    out_u32[1] = len_u;
+    for (size_t j = 0; j < 32; j++) {
+      out[j + 8] = key_base[j];
     }
   }
+  if (out_u32[0] && len_u < out_u32[1]) {
+    out_u32[0] = matched_pattern;
+    out_u32[1] = len_u;
+    for (size_t j = 0; j < 32; j++) {
+      out[j + 8] = key_base[j];
+    }
+  }
+}
+
 }
