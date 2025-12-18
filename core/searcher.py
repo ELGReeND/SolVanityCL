@@ -117,8 +117,6 @@ def multi_gpu_init(
                 chosen_devices=chosen_devices,
             )
             _SEARCHER_CACHE[cache_key] = searcher
-        else:
-            searcher.setting = setting
         i = 0
         st = time.time()
         while True:
