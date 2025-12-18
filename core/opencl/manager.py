@@ -26,6 +26,21 @@ def get_selected_gpu_devices(
     return [devices[d_id] for d_id in device_ids]
 
 
+def get_device_by_index(global_index: int) -> Tuple[int, int]:
+    """Return (platform_id, device_id) for a flattened GPU index."""
+    devices_by_platform: List[Tuple[int, int]] = []
+    for p_idx, platform_obj in enumerate(cl.get_platforms()):
+        devices = platform_obj.get_devices(device_type=cl.device_type.GPU)
+        devices_by_platform.extend((p_idx, d_idx) for d_idx in range(len(devices)))
+    if not devices_by_platform:
+        raise click.ClickException("No GPU devices found.")
+    if global_index < 0 or global_index >= len(devices_by_platform):
+        raise click.ClickException(
+            f"Device index {global_index} is out of range (0-{len(devices_by_platform) - 1})."
+        )
+    return devices_by_platform[global_index]
+
+
 def get_chosen_devices() -> Tuple[int, List[int]]:
     if "CHOSEN_OPENCL_DEVICES" in os.environ:
         platform_str, devices_str = os.environ.get("CHOSEN_OPENCL_DEVICES", "").split(
