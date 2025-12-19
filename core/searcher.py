@@ -11,6 +11,9 @@ from core.opencl.manager import (
     get_selected_gpu_devices,
 )
 
+# Per-worker-process cache: Pool workers stay alive across tasks, so we can reuse
+# the OpenCL context/program/buffers instead of rebuilding them for every found key.
+_SEARCHER_CACHE = {}
 
 class Searcher:
     def __init__(
@@ -35,7 +38,10 @@ class Searcher:
         )
         self.prev_time = None
         self.is_nvidia = "NVIDIA" in enabled_device.platform.name.upper()
-
+        
+        # Building the OpenCL program can be expensive. We cache Searcher instances
+        # per worker process and reuse them across repeated searches.
+        self.kernel_source = kernel_source
         program = cl.Program(self.context, kernel_source).build()
         self.kernel = cl.Kernel(program, "generate_pubkey")
         self.memobj_key32 = cl.Buffer(
@@ -50,12 +56,12 @@ class Searcher:
         self.memobj_occupied_bytes = cl.Buffer(
             self.context,
             cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-            hostbuf=np.array([self.setting.iteration_bytes]),
+            hostbuf=np.array([self.setting.iteration_bytes], dtype=np.ubyte),
         )
         self.memobj_group_offset = cl.Buffer(
             self.context,
             cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR,
-            hostbuf=np.array([self.index]),
+            hostbuf=np.array([self.index], dtype=np.ubyte),
         )
         self.output = np.zeros(40, dtype=np.ubyte)
         self.kernel.set_arg(0, self.memobj_key32)
@@ -63,8 +69,31 @@ class Searcher:
         self.kernel.set_arg(2, self.memobj_occupied_bytes)
         self.kernel.set_arg(3, self.memobj_group_offset)
 
+    def reset_setting(self, setting: HostSetting) -> None:
+        """Update setting for a reused Searcher instance.
+
+        This avoids recompiling the OpenCL program for each found key.
+        """
+        self.setting = setting
+        # iteration_bits is typically constant, but keep this correct just in case.
+        cl.enqueue_copy(
+            self.command_queue,
+            self.memobj_occupied_bytes,
+            np.array([self.setting.iteration_bytes], dtype=np.ubyte),
+        )
+
     def find(self, log_stats: bool = True) -> np.ndarray:
         start_time = time.time()
+        # The OpenCL kernel only writes to the output buffer when it finds a match.
+        # To avoid stale matches (especially when reusing a cached Searcher),
+        # clear the first 8 bytes (pattern id + addr length) before each launch.
+        cl.enqueue_fill_buffer(
+            self.command_queue,
+            self.memobj_output,
+            np.uint8(0),
+            0,
+            8,
+        )
         cl.enqueue_copy(self.command_queue, self.memobj_key32, self.setting.key32)
         global_work_size = self.setting.global_work_size // self.gpu_chunks
         local_size = self.setting.local_work_size
@@ -95,12 +124,29 @@ def multi_gpu_init(
     chosen_devices: Optional[Tuple[int, List[int]]] = None,
 ) -> List:
     try:
-        searcher = Searcher(
-            kernel_source=setting.kernel_source,
-            index=index,
-            setting=setting,
-            chosen_devices=chosen_devices,
+        # Cache Searcher instances inside each worker process.
+        # Pool workers live across multiple tasks, so this removes repeated OpenCL compilation.
+        chosen_key = (
+            None
+            if chosen_devices is None
+            else (chosen_devices[0], tuple(chosen_devices[1]))
         )
+        cache_key = (index, chosen_key)
+        searcher = _SEARCHER_CACHE.get(cache_key)
+        if (
+            searcher is None
+            or searcher.kernel_source != setting.kernel_source
+            or searcher.setting.iteration_bits != setting.iteration_bits
+        ):
+            searcher = Searcher(
+                kernel_source=setting.kernel_source,
+                index=index,
+                setting=setting,
+                chosen_devices=chosen_devices,
+            )
+            _SEARCHER_CACHE[cache_key] = searcher
+        else:
+            searcher.reset_setting(setting)
         i = 0
         st = time.time()
         while True:
