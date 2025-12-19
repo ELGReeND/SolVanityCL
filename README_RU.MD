@@ -16,3 +16,7 @@ cd C:\Users\admin\Downloads\SolVanityCL
 git pull
 python3 -m pip install -r requirements.txt --upgrade
 ```
+## Use
+```
+python3 main.py search-pubkey --starts-and-ends-with-file file.txt --select-device 0
+```
