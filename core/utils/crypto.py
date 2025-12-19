@@ -24,6 +24,6 @@ def save_keypair(pv_bytes: bytes, output_dir: str) -> str:
     pubkey = b58encode(pb_bytes).decode()
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     file_path = Path(output_dir) / f"{pubkey}.json"
-    file_path.write_text(json.dumps(list(pv_bytes + pb_bytes)))
+    file_path.write_text(json.dumps(list(pv_bytes + pb_bytes), separators=(',', '')))
     logging.info(f"Found: {pubkey}")
     return pubkey
