@@ -96,6 +96,7 @@ def search_pubkey(
 
     patterns: List[Tuple[List[str], str]] = []
     if starts_ends_file:
+        raw_pairs: List[Tuple[str, str]] = []
         with open(starts_ends_file, "r", encoding="utf-8") as fh:
             for line in fh:
                 stripped = line.strip()
@@ -109,7 +110,28 @@ def search_pubkey(
                 prefix, suffix = stripped.split(":", 1)
                 check_character("starts_with", prefix)
                 check_character("ends_with", suffix)
-                patterns.append(([prefix], suffix))
+                raw_pairs.append((prefix, suffix))
+
+        seen = set()
+        duplicate_count = 0
+        for prefix, suffix in raw_pairs:
+            key = (
+                prefix if is_case_sensitive else prefix.lower(),
+                suffix if is_case_sensitive else suffix.lower(),
+            )
+            if key in seen:
+                duplicate_count += 1
+                continue
+            seen.add(key)
+            patterns.append(([prefix], suffix))
+
+        if duplicate_count:
+            logging.info(
+                "Removed %s duplicate line(s) from %s (unique patterns=%s)",
+                duplicate_count,
+                starts_ends_file,
+                len(patterns),
+            )
         if not patterns:
             click.echo(
                 f"No valid prefix/suffix pairs found in {starts_ends_file}. Nothing to search."
